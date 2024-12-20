@@ -16,6 +16,7 @@
             flex-wrap: wrap;
             justify-content: center;
             gap: 20px;
+            padding: 20px;
         }
         .card {
             background: #fff;
@@ -24,15 +25,24 @@
             overflow: hidden;
             width: 300px;
             text-align: center;
-            transition: transform 0.3s;
+            transition: transform 0.3s, box-shadow 0.3s;
         }
         .card:hover {
             transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
         }
         .card img {
             width: 100%;
             height: 200px;
             object-fit: cover;
+            transition: opacity 0.3s;
+        }
+        .card img.loading {
+            opacity: 0.5;
+        }
+        .card img.error {
+            opacity: 0.7;
+            filter: grayscale(1);
         }
         .card-body {
             padding: 20px;
@@ -46,45 +56,121 @@
             margin: 0 0 15px;
             color: #666;
             font-size: 0.9rem;
+            line-height: 1.5;
         }
         .card-body .price {
             font-weight: bold;
             font-size: 1.2rem;
             color: #27ae60;
+            margin-top: 15px;
+        }
+        .loading-spinner {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 200px;
+        }
+        .loading-spinner::after {
+            content: '';
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #27ae60;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        .error-message {
+            color: #e74c3c;
+            text-align: center;
+            padding: 20px;
+            background: #fde8e8;
+            border-radius: 8px;
+            margin: 20px auto;
+            max-width: 600px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .retry-button {
+            background: #27ae60;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: background 0.3s;
+        }
+        .retry-button:hover {
+            background: #219a52;
         }
     </style>
 </head>
 <body>
-    <h1>Product Showcase</h1>
+    <h1 style="text-align: center;">Product Showcase</h1>
     <div class="container" id="product-container">
-        <!-- Product cards will be inserted here -->
+        <div class="loading-spinner"></div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script>
         async function fetchProducts() {
+            const container = document.getElementById('product-container');
+            
             try {
+                container.innerHTML = '<div class="loading-spinner"></div>';
                 const response = await axios.get('/products');
                 const products = response.data;
-                const container = document.getElementById('product-container');
+                
+                if (!products || products.length === 0) {
+                    container.innerHTML = '<p>No products available at the moment.</p>';
+                    return;
+                }
 
+                container.innerHTML = '';
                 products.forEach(product => {
                     const card = document.createElement('div');
                     card.className = 'card';
+                    
+                    const imageUrl = product.image || '/placeholder.jpg';
+                    
                     card.innerHTML = `
-                        <img src="${product.image || 'placeholder.jpg'}" alt="${product.name}">
+                        <img src="${imageUrl}" 
+                             alt="${product.name}"
+                             class="loading"
+                             onerror="this.onerror=null; this.src='/placeholder.jpg'; this.classList.add('error')"
+                             onload="this.classList.remove('loading')">
                         <div class="card-body">
-                            <h3>${product.name}</h3>
-                            <p>${product.description}</p>
-                            <p class="price">$${product.price}</p>
+                            <h3>${escapeHtml(product.name)}</h3>
+                            <p>${escapeHtml(product.description)}</p>
+                            <p class="price">$${parseFloat(product.price).toFixed(2)}</p>
                         </div>
                     `;
                     container.appendChild(card);
                 });
             } catch (error) {
                 console.error('Error fetching products:', error);
+                container.innerHTML = `
+                    <div class="error-message">
+                        <p>Sorry, we couldn't load the products at this time.</p>
+                        <button class="retry-button" onclick="fetchProducts()">Try Again</button>
+                    </div>
+                `;
             }
         }
-        fetchProducts();
+
+        // Helper function to escape HTML and prevent XSS
+        function escapeHtml(unsafe) {
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // Start loading products when the page loads
+        document.addEventListener('DOMContentLoaded', fetchProducts);
     </script>
 </body>
 </html>

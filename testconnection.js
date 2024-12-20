@@ -12,10 +12,6 @@ const port = 3000;
 // Middleware to parse JSON
 app.use(bodyParser.json({ limit: '50mb' }));
 
-// Serve static files for images and other assets
-app.use(express.static('uploads'));
-app.use(express.static('public'));
-
 // SQL Server configuration
 const config = {
     server: 'ANSHAD',
@@ -33,7 +29,12 @@ const imageDirectory = path.join(__dirname, 'uploads');
 // Ensure the image directory exists
 if (!fs.existsSync(imageDirectory)) {
     fs.mkdirSync(imageDirectory);
+    console.log('Created uploads directory at:', imageDirectory);
 }
+
+// Configure static file serving with explicit paths
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
@@ -42,21 +43,55 @@ const storage = multer.diskStorage({
     },
     filename: function (req, file, cb) {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        const filename = file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname);
+        console.log('Generated filename:', filename);
+        cb(null, filename);
     },
 });
 
-const upload = multer({ storage: storage });
+// Enhanced upload middleware with logging
+const upload = multer({ 
+    storage: storage,
+    fileFilter: (req, file, cb) => {
+        console.log('Processing upload:', file);
+        // Add file type validation if needed
+        const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+        if (!allowedTypes.includes(file.mimetype)) {
+            cb(new Error('Invalid file type'), false);
+            return;
+        }
+        cb(null, true);
+    }
+});
 
 // Connect to the database
 async function connectToDatabase() {
     try {
         await sql.connect(config);
-        console.log('Connected to the database');
+        console.log('Connected to the database successfully');
     } catch (error) {
         console.error('Database connection error:', error);
+        process.exit(1); // Exit if database connection fails
     }
 }
+
+// Debug route to check if image exists
+app.get('/check-image/:filename', (req, res) => {
+    const imagePath = path.join(imageDirectory, req.params.filename);
+    if (fs.existsSync(imagePath)) {
+        res.json({ 
+            exists: true, 
+            path: imagePath,
+            stats: fs.statSync(imagePath)
+        });
+    } else {
+        res.json({ 
+            exists: false, 
+            path: imagePath,
+            uploadsDirContent: fs.readdirSync(imageDirectory)
+        });
+    }
+});
 
 // Serve the HTML file
 app.get('/', (req, res) => {
@@ -67,24 +102,28 @@ app.get('/', (req, res) => {
 app.get('/products', async (req, res) => {
     try {
         const result = await sql.query(`
-            SELECT 
-                id, 
-                name, 
-                description, 
-                price, 
-                image 
+            SELECT id, name, description, price, image 
             FROM products
         `);
 
-        // Map image paths to URLs
-        result.recordset.forEach((product) => {
+        const products = result.recordset.map(product => {
             if (product.image) {
-                product.image = `http://localhost:${port}/uploads/${product.image}`;
+                const imagePath = path.join(imageDirectory, product.image);
+                const imageExists = fs.existsSync(imagePath);
+                product.image = `/uploads/${product.image}`;
+                product.imageExists = imageExists;
+                console.log('Product image path:', {
+                    url: product.image,
+                    physicalPath: imagePath,
+                    exists: imageExists
+                });
             }
+            return product;
         });
 
-        res.json(result.recordset);
+        res.json(products);
     } catch (error) {
+        console.error('Error fetching products:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -93,6 +132,11 @@ app.get('/products', async (req, res) => {
 app.post('/products', upload.single('image'), async (req, res) => {
     const { name, price, description } = req.body;
     const image = req.file;
+
+    console.log('Upload request received:', {
+        body: req.body,
+        file: image
+    });
 
     if (!name || !price || !description) {
         return res.status(400).json({ error: 'Missing required fields: name, price, or description' });
@@ -110,14 +154,36 @@ app.post('/products', upload.single('image'), async (req, res) => {
             VALUES (@name, @price, @description, @image)
         `);
 
-        res.status(201).json({ message: 'Product added successfully' });
+        if (image) {
+            console.log('File saved successfully:', {
+                filename: image.filename,
+                path: image.path,
+                size: image.size
+            });
+        }
+
+        res.status(201).json({ 
+            message: 'Product added successfully',
+            imagePath: image ? `/uploads/${image.filename}` : null
+        });
     } catch (error) {
+        console.error('Error adding product:', error);
         res.status(500).json({ error: error.message });
     }
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+    console.error('Server error:', err);
+    res.status(500).json({ 
+        error: 'Server error', 
+        message: err.message 
+    });
 });
 
 // Start the server
 app.listen(port, async () => {
     await connectToDatabase();
     console.log(`Server is running at http://localhost:${port}`);
+    console.log(`Image directory: ${imageDirectory}`);
 });
